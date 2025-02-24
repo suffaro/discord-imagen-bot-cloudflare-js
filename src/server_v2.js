@@ -1,3 +1,7 @@
+/**
+ * The core server that runs on a Cloudflare worker.
+ */
+
 import { AutoRouter } from 'itty-router';
 import {
   InteractionResponseType,
@@ -43,72 +47,10 @@ router.post('/', async (request, env) => {
   if (interaction.type === InteractionType.APPLICATION_COMMAND) {
     switch (interaction.data.name.toLowerCase()) {
       case GENERATE_IMAGE.name.toLowerCase(): {
-        // Acknowledge the interaction and defer the response
-        const initialResponse = new JsonResponse({
+        // Immediately respond with a deferred message
+        return new JsonResponse({
           type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
         });
-
-        // Process the image generation asynchronously
-        const generateImageTask = async () => {
-          const { prompt, model, sampler, seed, neg_prompt } =
-            interaction.data.options.reduce((acc, option) => {
-              acc[option.name] = option.value;
-              return acc;
-            }, {});
-
-          try {
-            const imageBuffer = await generateImageProdia(
-              prompt,
-              model,
-              sampler,
-              seed,
-              neg_prompt,
-            );
-
-            const formData = new FormData();
-            formData.append(
-              'file',
-              new Blob([imageBuffer]),
-              'generated_image.png',
-            );
-
-            await fetch(
-              `https://discord.com/api/v10/webhooks/${env.DISCORD_APPLICATION_ID}/${interaction.token}`,
-              {
-                method: 'POST',
-                body: JSON.stringify({
-                  content: `Image generated for prompt: "${prompt}"`,
-                  attachments: [
-                    {
-                      id: 0,
-                      filename: 'generated_image.png',
-                    },
-                  ],
-                }),
-                headers: {
-                  'Content-Type': 'application/json',
-                },
-              },
-            );
-          } catch (error) {
-            console.error('Error generating image:', error);
-            await fetch(
-              `https://discord.com/api/v10/webhooks/${env.DISCORD_APPLICATION_ID}/${interaction.token}`,
-              {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                  content: `Failed to generate image. Error: ${error.message}`,
-                }),
-              },
-            );
-          }
-        };
-
-        generateImageTask(); // Fire the async task
-        return initialResponse; // Return the deferred response
       }
       default:
         return new JsonResponse({ error: 'Unknown Type' }, { status: 400 });
@@ -117,6 +59,61 @@ router.post('/', async (request, env) => {
 
   console.error('Unknown Type');
   return new JsonResponse({ error: 'Unknown Type' }, { status: 400 });
+});
+
+// New route to handle actual image generation
+router.post('/generate-image', async (request, env) => {
+  const { prompt, model, sampler, seed, neg_prompt, interaction_token } =
+    await request.json();
+
+  try {
+    const imageBuffer = await generateImageProdia(
+      prompt,
+      model,
+      sampler,
+      seed,
+      neg_prompt,
+    );
+
+    // Send follow-up message with image
+    const followUpUrl = `https://discord.com/api/v10/webhooks/${env.DISCORD_APPLICATION_ID}/${interaction_token}`;
+
+    const formData = new FormData();
+    formData.append('content', `Image generated for prompt: "${prompt}"`);
+    formData.append('files[0]', new Blob([imageBuffer]), 'generated_image.png');
+
+    const response = await fetch(followUpUrl, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Discord API error:', errorText);
+      return new JsonResponse(
+        { error: 'Failed to send image' },
+        { status: 500 },
+      );
+    }
+
+    return new JsonResponse({ success: true });
+  } catch (error) {
+    console.error('Error generating or sending image:', error);
+
+    // Send error follow-up
+    const followUpUrl = `https://discord.com/api/v10/webhooks/${env.DISCORD_APPLICATION_ID}/${interaction_token}`;
+    await fetch(followUpUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        content: `Failed to generate image. Error: ${error.message}`,
+      }),
+    });
+
+    return new JsonResponse({ error: error.message }, { status: 500 });
+  }
 });
 
 router.all('*', () => new Response('Not Found.', { status: 404 }));
