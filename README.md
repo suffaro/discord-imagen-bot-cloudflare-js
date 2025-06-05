@@ -1,2 +1,2 @@
 ﻿# discord-imagen-bot-cloudflare-js
-Using ProdiaAPI workaround (for free content) generates images for your Discord Server via Cloudflare.
+Using ProdiaAPI workaround (a little reverse engineering of requests) to generate images for your Discord Server via Cloudflare.
